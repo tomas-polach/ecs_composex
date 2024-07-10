@@ -410,7 +410,7 @@ def add_parameter_group(template: Template, db: Rds, session: Session = None) ->
         )
 
 
-def override_set_properties(props: dict, db: Rds) -> None:
+def override_set_properties(props: dict, rds_class: type, db: Rds) -> None:
     """
     Override secrets parameters from the rds properties
     """
@@ -426,10 +426,21 @@ def override_set_properties(props: dict, db: Rds) -> None:
             "MasterUserPassword": Sub(
                 f"{{{{resolve:secretsmanager:${{{db.db_secret.title}}}:SecretString:password}}}}"
             ),
-            "VpcSecurityGroupIds": [Ref(db.db_sg)],
             "DBSubnetGroupName": Ref(db.db_subnet_group),
         },
     )
+    if rds_class == DBCluster:
+        props.update(
+            {
+                "VpcSecurityGroupIds": [Ref(db.db_sg)],
+            }
+        )
+    elif rds_class == DBInstance:
+        props.update(
+            {
+                "VPCSecurityGroups": [Ref(db.db_sg)],
+            }
+        )
 
 
 def determine_resource_type(db_name: str, properties: dict) -> type | None:
@@ -515,9 +526,11 @@ def create_from_properties(db_template: Template, db: Rds) -> None:
     rds_class = determine_resource_type(db.name, db.properties)
     if rds_class:
         rds_props = import_record_properties(db.properties, rds_class)
-        if not keyisset("DatabaseName", rds_props):
+        if rds_class == DBCluster and not keyisset("DatabaseName", rds_props):
             rds_props["DatabaseName"] = Ref(DB_NAME)
-        override_set_properties(rds_props, db)
+        elif rds_class == DBInstance and not keyisset("DBName", rds_props):
+            rds_props["DBName"] = Ref(DB_NAME)
+        override_set_properties(rds_props, rds_class, db)
         db.cfn_resource = rds_class(db.logical_name, **rds_props)
         add_resource(db_template, db.cfn_resource)
     elif db.parameters:
